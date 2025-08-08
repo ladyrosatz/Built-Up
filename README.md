@@ -293,3 +293,50 @@ Export.image.toDrive({
   maxPixels: 1e13
 });
 
+
+
+LUZ NOCTURNA
+
+// ROI
+var roi = geometry;
+
+// 1) VIIRS luz nocturna (mensual, libre de nubes)
+var viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
+  .filterDate('2024-01-01', '2024-04-29')  // mes a analizar
+  .select('avg_rad')
+  .median()
+  .clip(roi);
+
+// 2) Visualización (negro→amarillo→blanco)
+Map.centerObject(roi, 11);
+Map.addLayer(viirs, {min: 0, max: 20, palette: ['000000','ffff00','ffffff']}, 'VIIRS avg_rad');
+
+
+
+// 4) (Opcional) Intersección con tu urbano por NBUI/NDBI
+// var urbano = nbuiMasked.gt(0.2);       // tu capa urbana (ejemplo)
+// var urbano_con_luz = urbano.updateMask(lit); 
+// Map.addLayer(urbano_con_luz, {palette:['cyan']}, 'Urbano + luz');
+
+// 5) (Opcional) Área iluminada (m² / km²)
+var area_m2 = lit.multiply(ee.Image.pixelArea())
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: roi,
+    scale: 500,       // nativo VIIRS ~500 m
+    maxPixels: 1e13
+  });
+print('Área iluminada (m²):', area_m2);
+
+// 6) Exportar raster de luz/no-luz
+Export.image.toDrive({
+  image: lit,
+  description: 'VIIRS_LuzNocturna_Binaria',
+  folder: 'EarthEngine_Exports',
+  fileNamePrefix: 'VIIRS_LuzNocturna_2024_01',
+  region: roi,
+  scale: 500,
+  crs: 'EPSG:32718',
+  maxPixels: 1e13
+});
+
