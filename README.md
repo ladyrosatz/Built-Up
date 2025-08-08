@@ -156,3 +156,80 @@ Export.image.toDrive({
   crs: 'EPSG:32718',
   maxPixels: 1e13
 });
+
+
+
+
+## PRUEBA 1: NBUI SENTINEL
+
+PRUEBA 2: SATELITE SENTINEL
+
+var roi = geometry;
+// PRUEBA 1
+// Colección Sentinel-2 SR (superficie reflectancia)
+var collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(roi)
+  .filterDate('2024-01-01', '2024-02-29')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// Función para enmascarar nubes usando QA60
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+               .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);  // escalar reflectancia
+}
+
+// Imagen compuesta libre de nubes
+var image = collection.map(maskS2clouds).median().clip(roi);
+
+// Selección de bandas adaptadas
+var B2 = image.select('B3');   // Verde
+var B3 = image.select('B4');   // Rojo
+var B4 = image.select('B8');   // NIR
+var B5 = image.select('B11');  // SWIR1
+var B6 = image.select('B8');   // Sustituto aproximado para térmica (no hay en Sentinel)
+
+// Parámetro I
+var I = ee.Number(1);
+
+// NBUI adaptado
+var term1 = B5.subtract(B4).divide(
+  B5.add(B6).sqrt().multiply(10)
+);
+
+var term2 = B4.subtract(B3).multiply(I.add(1))
+  .divide(B4.subtract(B3).add(1));
+
+var term3 = B2.subtract(B5).divide(B2.add(B5));
+
+var nbui = term1.subtract(term2.add(term3)).rename('NBUI');
+
+// NDVI para enmascarar zonas verdes
+var ndvi = image.normalizedDifference(['B8', 'B4']); // NDVI = (NIR - RED)/(NIR + RED)
+var mask = ndvi.gt(0.09);
+var nbuiMasked = nbui.updateMask(mask).clip(roi);
+
+// Visualizar
+Map.centerObject(roi, 10);
+Map.addLayer(nbuiMasked, {min: -0.5, max: 0.5, palette: ['blue', 'white', 'red']}, 'NBUI ajustado');
+
+// Umbral para zonas urbanas
+var zonasUrbanas = nbuiMasked.gt(0.3).selfMask();
+Map.addLayer(zonasUrbanas, {palette: ['red']}, 'Zonas urbanas');
+
+// Exportar
+Export.image.toDrive({
+  image: zonasUrbanas,
+  description: 'ZonasUrbanas_Sentinel2',
+  folder: 'EarthEngine_Exports',
+  fileNamePrefix: 'Zonas_Urbanas_Sentinel2_2024',
+  region: roi,
+  scale: 10,
+  crs: 'EPSG:32718',
+  maxPixels: 1e13
+});
+
+
