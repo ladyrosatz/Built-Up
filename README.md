@@ -109,8 +109,6 @@ Export.image.toDrive({
 
 
 
-
-
 ## PRUEBA 1: UI
 
 // ROI y colección
@@ -232,4 +230,66 @@ Export.image.toDrive({
   maxPixels: 1e13
 });
 
+
+
+
+
+## PRUEBA 1: NDBI SENTINEL
+// 1. Definir región de interés
+var roi = geometry;
+
+// 2. Colección Sentinel-2 (superficie reflectancia corregida)
+var collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(roi)
+  .filterDate('2024-01-01', '2024-02-29')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// 3. Enmascarar nubes usando QA60
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+               .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);  // reflectancia en escala 0–1
+}
+
+// 4. Composición sin nubes
+var image = collection.map(maskS2clouds).median().clip(roi);
+
+// 5. Bandas para NDBI
+var NIR = image.select('B8');   // Banda 8 - NIR
+var SWIR1 = image.select('B11'); // Banda 11 - SWIR1
+
+// 6. Calcular NDBI
+var ndbi = SWIR1.subtract(NIR)
+                .divide(SWIR1.add(NIR))
+                .rename('NDBI');
+
+// 7. Recortar al ROI
+var ndbi_clip = ndbi.clip(roi);
+
+// 8. Visualización del índice NDBI
+Map.centerObject(roi, 12);
+Map.addLayer(ndbi_clip, {
+  min: -0.5, 
+  max: 0.5, 
+  palette: ['blue', 'white', 'red']
+}, 'NDBI estilo completo');
+
+// 9. Umbral para zonas urbanas (ajustable)
+var urbanNDBI = ndbi_clip.gt(0.1).selfMask();  // Prueba también 0.2
+Map.addLayer(urbanNDBI, {palette: ['red']}, 'Zonas urbanas (NDBI)');
+
+// 10. Exportar a Google Drive
+Export.image.toDrive({
+  image: urbanNDBI,
+  description: 'ZonasUrbanas_NDBI_Sentinel2',
+  folder: 'EarthEngine_Exports',
+  fileNamePrefix: 'NDBI_Zonas_Urbanas_Sentinel2_2024',
+  region: roi,
+  scale: 10,
+  crs: 'EPSG:32718',
+  maxPixels: 1e13
+});
 
