@@ -180,6 +180,25 @@ function maskS2clouds(image) {
   return image.updateMask(mask).divide(10000);  // escalar reflectancia
 }
 
+// Función para enmascarar con la capa SCL (más precisa): eliminar nubes o agua
+function maskSCL(img) {
+  var scl = img.select('SCL'); // Clasificación de escena
+  var good = scl.neq(1)  // Saturado
+              .and(scl.neq(3))  // Sombra de nube
+              .and(scl.neq(8))  // Nube
+              .and(scl.neq(9))  // Cirrus
+              .and(scl.neq(10)) // Nieve
+              .and(scl.neq(11));// Agua
+  return img.updateMask(good);
+}
+
+// Imagen compuesta libre de nubes y sombras
+var image = collection
+  .map(maskS2clouds)  // quita nubes QA60
+  .map(maskSCL)       // quita sombras, agua, etc.
+  .median()
+  .clip(roi);
+
 // Imagen compuesta libre de nubes
 var image = collection.map(maskS2clouds).median().clip(roi);
 
@@ -191,7 +210,7 @@ var B5 = image.select('B11');  // SWIR1
 var B6 = image.select('B8');   // Sustituto aproximado para térmica (no hay en Sentinel)
 
 // Parámetro I
-var I = ee.Number(1);
+var I = ee.Number(1.2);
 
 // NBUI adaptado
 var term1 = B5.subtract(B4).divide(
@@ -207,7 +226,7 @@ var nbui = term1.subtract(term2.add(term3)).rename('NBUI');
 
 // NDVI para enmascarar zonas verdes
 var ndvi = image.normalizedDifference(['B8', 'B4']); // NDVI = (NIR - RED)/(NIR + RED)
-var mask = ndvi.gt(0.09);
+var mask = ndvi.gt(0.08); // prueba 0.03–0.08
 var nbuiMasked = nbui.updateMask(mask).clip(roi);
 
 // Visualizar
@@ -339,4 +358,144 @@ Export.image.toDrive({
   crs: 'EPSG:32718',
   maxPixels: 1e13
 });
+
+
+
+
+## PRUEBA 3: NBUI SENTINEL
+var roi = geometry;
+// PRUEBA 1
+// Colección Sentinel-2 SR (superficie reflectancia)
+var collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(roi)
+  .filterDate('2024-01-01', '2024-02-29')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// Función para enmascarar nubes usando QA60
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+               .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);  // escalar reflectancia
+}
+
+// Función para enmascarar con la capa SCL (más precisa): eliminar nubes o agua
+function maskSCL(img) {
+  var scl = img.select('SCL'); // Clasificación de escena
+  var good = scl.neq(1)  // Saturado
+              .and(scl.neq(3))  // Sombra de nube
+              .and(scl.neq(8))  // Nube
+              .and(scl.neq(9))  // Cirrus
+              .and(scl.neq(10)) // Nieve
+              .and(scl.neq(11));// Agua
+  return img.updateMask(good);
+}
+
+// Imagen compuesta libre de nubes y sombras
+var image = collection
+  .map(maskS2clouds)  // quita nubes QA60
+  .map(maskSCL)       // quita sombras, agua, etc.
+  .median()
+  .clip(roi);
+
+// Imagen compuesta libre de nubes
+var image = collection.map(maskS2clouds).median().clip(roi);
+
+// Selección de bandas adaptadas
+var B2 = image.select('B3');   // Verde
+var B3 = image.select('B4');   // Rojo
+var B4 = image.select('B8');   // NIR
+var B5 = image.select('B11');  // SWIR1
+var B6 = image.select('B8');   // Sustituto aproximado para térmica (no hay en Sentinel)
+
+// Parámetro I
+var I = ee.Number(1.2);
+
+// NBUI adaptado
+var term1 = B5.subtract(B4).divide(
+  B5.add(B6).sqrt().multiply(10)
+);
+
+var term2 = B4.subtract(B3).multiply(I.add(1))
+  .divide(B4.subtract(B3).add(1));
+
+var term3 = B2.subtract(B5).divide(B2.add(B5));
+
+var nbui = term1.subtract(term2.add(term3)).rename('NBUI');
+
+// NDVI para enmascarar zonas verdes
+var ndvi = image.normalizedDifference(['B8', 'B4']); // NDVI = (NIR - RED)/(NIR + RED)
+var mask = ndvi.gt(0.08); // prueba 0.03–0.08
+var nbuiMasked = nbui.updateMask(mask).clip(roi);
+
+// Visualizar
+Map.centerObject(roi, 10);
+Map.addLayer(nbuiMasked, {min: -0.5, max: 0.5, palette: ['blue', 'white', 'red']}, 'NBUI ajustado');
+
+// Umbral para zonas urbanas
+var zonasUrbanas = nbuiMasked.gt(0.3).selfMask(); // prueba 0.15–0.30
+
+// === Limpieza morfológica y filtrado ===
+
+// 1) Suavizar NBUI binario para reducir pixelación
+var zonasSmooth = zonasUrbanas.focal_mean({
+  kernel: ee.Kernel.square(1),
+  iterations: 1
+}).gt(0.5).selfMask();
+
+// 2) Quitar islas pequeñas (< minPatch píxeles)
+var minPatch = 50; // ajusta según escala
+var keepBig = zonasSmooth.connectedPixelCount({maxSize: 256, eightConnected: true}).gte(minPatch);
+var zonasBig = zonasSmooth.updateMask(keepBig).selfMask();
+
+// 3) Rellenar huecos internos pequeños (< holeMax píxeles)
+var holeMax = 30;
+var holes = zonasBig.not()
+  .connectedPixelCount({maxSize: 256, eightConnected: true})
+  .lt(holeMax);
+var zonasFilled = zonasBig.where(holes, 1).selfMask();
+
+// 4) Cierre morfológico (dilatar y erosionar) para suavizar bordes
+var k = ee.Kernel.square(1);
+var zonasClean = zonasFilled.focal_max({kernel: k}).focal_min({kernel: k}).selfMask();
+
+// === Fin limpieza ===
+
+// Visualizar SOLO el NBUI continuo
+Map.layers().reset(); // limpia todas las capas del panel
+Map.centerObject(roi, 12);
+Map.addLayer(
+  nbuiMasked,
+  {min: -0.5, max: 0.5, palette: ['blue','white','red']},
+  'NBUI continuo'
+);
+
+// Si exportas, exporta el NBUI continuo:
+Export.image.toDrive({
+  image: nbuiMasked,
+  description: 'NBUI_continuo_Sentinel2',
+  folder: 'EarthEngine_Exports',
+  fileNamePrefix: 'NBUI_continuo_2024',
+  region: roi,
+  scale: 20,   // sugerencia por B11 a 20 m
+  crs: 'EPSG:32718',
+  maxPixels: 1e13
+});
+
+
+
+## PRUEBA 3: NDBI SENTINEL
+
+
+
+## PRUEBA 3: NDBI SENTINEL
+
+
+
+## PRUEBA 3: LUZ NOCTURNA
+
+
+
 
