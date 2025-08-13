@@ -430,22 +430,23 @@ var ndvi = image.normalizedDifference(['B8', 'B4']); // NDVI = (NIR - RED)/(NIR 
 var mask = ndvi.gt(0.08); // prueba 0.03–0.08
 var nbuiMasked = nbui.updateMask(mask).clip(roi);
 
-// Visualizar
-Map.centerObject(roi, 10);
-Map.addLayer(nbuiMasked, {min: -0.5, max: 0.5, palette: ['blue', 'white', 'red']}, 'NBUI ajustado');
+// Visualizar SOLO el NBUI continuo
+Map.layers().reset(); // limpia todas las capas del panel
+Map.centerObject(roi, 12);
+Map.addLayer(
+  nbuiMasked,
+  {min: -0.5, max: 0.5, palette: ['blue','white','red']},
+  'NBUI continuo'
+);
 
-// Umbral para zonas urbanas
-var zonasUrbanas = nbuiMasked.gt(0.3).selfMask();
-Map.addLayer(zonasUrbanas, {palette: ['red']}, 'Zonas urbanas');
-
-// Exportar
+// Si exportas, exporta el NBUI continuo:
 Export.image.toDrive({
-  image: zonasUrbanas,
-  description: 'ZonasUrbanas_Sentinel2_13',
+  image: nbuiMasked,
+  description: 'NBUI_continuo_Sentinel2',
   folder: 'EarthEngine_Exports',
-  fileNamePrefix: 'Zonas_Urbanas_Sentinel2_2024_13',
+  fileNamePrefix: 'NBUI_continuo_2024',
   region: roi,
-  scale: 10,
+  scale: 20,   // sugerencia por B11 a 20 m
   crs: 'EPSG:32718',
   maxPixels: 1e13
 });
