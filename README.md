@@ -368,8 +368,8 @@ var roi = geometry;
 // Colección Sentinel-2 SR (superficie reflectancia)
 var collection = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
   .filterBounds(roi)
-  .filterDate('2024-01-01', '2024-02-29')
-  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+  .filterDate('2024-01-01', '2024-07-29')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5));
 
 // Función para enmascarar nubes usando QA60
 function maskS2clouds(image) {
@@ -411,7 +411,7 @@ var B5 = image.select('B11');  // SWIR1
 var B6 = image.select('B8');   // Sustituto aproximado para térmica (no hay en Sentinel)
 
 // Parámetro I
-var I = ee.Number(1.2);
+var I = ee.Number(1.5);
 
 // NBUI adaptado
 var term1 = B5.subtract(B4).divide(
@@ -435,51 +435,17 @@ Map.centerObject(roi, 10);
 Map.addLayer(nbuiMasked, {min: -0.5, max: 0.5, palette: ['blue', 'white', 'red']}, 'NBUI ajustado');
 
 // Umbral para zonas urbanas
-var zonasUrbanas = nbuiMasked.gt(0.3).selfMask(); // prueba 0.15–0.30
+var zonasUrbanas = nbuiMasked.gt(0.3).selfMask();
+Map.addLayer(zonasUrbanas, {palette: ['red']}, 'Zonas urbanas');
 
-// === Limpieza morfológica y filtrado ===
-
-// 1) Suavizar NBUI binario para reducir pixelación
-var zonasSmooth = zonasUrbanas.focal_mean({
-  kernel: ee.Kernel.square(1),
-  iterations: 1
-}).gt(0.5).selfMask();
-
-// 2) Quitar islas pequeñas (< minPatch píxeles)
-var minPatch = 50; // ajusta según escala
-var keepBig = zonasSmooth.connectedPixelCount({maxSize: 256, eightConnected: true}).gte(minPatch);
-var zonasBig = zonasSmooth.updateMask(keepBig).selfMask();
-
-// 3) Rellenar huecos internos pequeños (< holeMax píxeles)
-var holeMax = 30;
-var holes = zonasBig.not()
-  .connectedPixelCount({maxSize: 256, eightConnected: true})
-  .lt(holeMax);
-var zonasFilled = zonasBig.where(holes, 1).selfMask();
-
-// 4) Cierre morfológico (dilatar y erosionar) para suavizar bordes
-var k = ee.Kernel.square(1);
-var zonasClean = zonasFilled.focal_max({kernel: k}).focal_min({kernel: k}).selfMask();
-
-// === Fin limpieza ===
-
-// Visualizar SOLO el NBUI continuo
-Map.layers().reset(); // limpia todas las capas del panel
-Map.centerObject(roi, 12);
-Map.addLayer(
-  nbuiMasked,
-  {min: -0.5, max: 0.5, palette: ['blue','white','red']},
-  'NBUI continuo'
-);
-
-// Si exportas, exporta el NBUI continuo:
+// Exportar
 Export.image.toDrive({
-  image: nbuiMasked,
-  description: 'NBUI_continuo_Sentinel2',
+  image: zonasUrbanas,
+  description: 'ZonasUrbanas_Sentinel2_13',
   folder: 'EarthEngine_Exports',
-  fileNamePrefix: 'NBUI_continuo_2024',
+  fileNamePrefix: 'Zonas_Urbanas_Sentinel2_2024_13',
   region: roi,
-  scale: 20,   // sugerencia por B11 a 20 m
+  scale: 10,
   crs: 'EPSG:32718',
   maxPixels: 1e13
 });
